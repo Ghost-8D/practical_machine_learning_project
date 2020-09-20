@@ -1,0 +1,158 @@
+---
+title: "Predicting Barbell Lifts Class"
+author: "Panayiotis L."
+date: "9/20/2020"
+output: 
+    html_document:
+        keep_md: true
+        toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Summary
+In this report we will attempt to predict whether a barbell lift was performed
+correctly or not using different measurements from accelerometers on the belt, 
+forearm, arm, and dumbell of 6 participants. They were asked to perform barbell 
+lifts correctly and incorrectly in 5 different ways. More information is 
+available from the website [here](http://groupware.les.inf.puc-rio.br/har) 
+(see the section on the Weight Lifting Exercise Dataset). We used a KNN model
+which helped us predict the test data with 95% accuracy!
+
+# Requirements
+Load necessary libraries:
+```{r load_libraries, results=FALSE, warning=FALSE, message=FALSE}
+library(data.table)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(R.utils)
+library(caret)
+```
+
+Display session info:
+```{r session_info, cache=TRUE}
+sessionInfo()
+```
+
+# Data Processing
+1. Read the train and test data from the urls, no need to download them.
+2. Convert the dataframes to tibbles for easier handling.
+```{r get_data, cache=TRUE}
+train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train_data <- fread(train_url)
+test_data <- fread(test_url)
+train_data <- as_tibble(train_data)
+test_data <- as_tibble(test_data)
+#train_data$Date <- as.Date(train_data$cvtd_timestamp, format="%d/%m/%Y")
+#train_data$Time <- as_datetime(train_data$cvtd_timestamp, format="%d/%m/%Y %H:%M")
+```
+
+## Exploratory Data Analysis (EDA)
+Let's take a look at the data:
+```{r eda, cache=TRUE}
+str(train_data)
+summary(train_data)
+```
+It seems that there are many columns that include only NAs. We can exclude them 
+from our datasets as they will just slow down the training time of our models.
+More specifically, we will use only the columns where the frequency of NAs is 
+less than 0.4 (less than 40% of the rows have NAs).
+
+We also delete the first 7 columns: X, user_name, raw_timestamp_part_1, 
+raw_timestamp_part_2, cvtd_timestamp, new_window, num_window, since these features 
+are probably not related to the outcome classe.
+
+```{r clean_data, cache=TRUE}
+use <- colMeans(is.na(train_data)) < 0.4
+training <- train_data[, use]
+training$classe <- as.factor(training$classe)
+training <- training[,-nearZeroVar(training)]
+training <- training[,-c(1,2,3,4,5,6,7)]
+
+testing <- test_data[, use]
+testing <- testing[,-nearZeroVar(testing)]
+testing <- testing[,-c(1,2,3,4,5,6,7)]
+```
+
+## Principal Component Analysis (PCA)
+We use knnImpute method to impute the remaining missing values, we also
+standardize each feature and then use PCA to reduce the number of total features.
+We apply the same transformations to the testing data.
+
+```{r pca, cache=TRUE, warning=FALSE}
+set.seed(42)
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+train_set <- training[inTrain, ]
+valid_set <- training[-inTrain, ]
+
+preObj <- preProcess(train_set, method=c("center", "scale", "knnImpute", "pca"), 
+                     thresh=0.9)
+train_clean <- predict(preObj, train_set)
+valid_clean <- predict(preObj, valid_set)
+test_clean <- predict(preObj, testing)
+```
+
+# Training Phase
+## KNN model
+Before we train our model we will set a seed so that the results are 
+reproducible. We employ a KNN model as random forest and gradient boosting trees
+could not produce better results. We use the validation data to check the
+accuracy of our model and display the confusion matrix.
+```{r training_knn, cache=TRUE}
+set.seed(42)
+model <- train(classe ~.,data=train_clean, method="knn")
+confusionMatrix(valid_clean$classe, predict(model, valid_clean))
+```
+
+As we can see, our model reached approximately 96.2% accuracy which is great! 
+We did not even have to use ensembles to reach this accuracy and our model is
+very simple.
+
+## Random Forest model
+Let's try a random forest with cross validation and display the confusion matrix
+for the validation data.
+```{r training_rf, cache=TRUE}
+cv_model <- train(classe ~., data = train_clean, method = "rf", verbose=FALSE, 
+                  trControl = trainControl(method="cv"), number = 3)
+confusionMatrix(valid_clean$classe, predict(cv_model, valid_clean))
+```
+This model achieved higher accuracy compared to the knn model with about 97.3%
+validation accuracy. We expect that the random forest model will perform 
+slightly better than the knn model, on the test data or at least the same.
+
+# Prediction Results
+## KNN predictions
+Now let's use our knn model to make predictions on the test data. The test 
+predictions result in 95% accuracy which is awesome! Only the 3rd prediction 
+seems to be wrong.
+```{r knn_pred}
+knn_pred <- predict(model, test_clean)
+knn_pred
+```
+
+## Random Forest predictions
+What about the cross validation random forest model? The random forest model 
+achieved an amazing 100% prediction accuracy on the test data!
+```{r rf_pred}
+rf_pred <- predict(cv_model, test_clean)
+rf_pred
+```
+## Model Predictions Comparison
+```{r plot}
+ggplot(test_clean, aes(x=knn_pred, y=rf_pred)) + geom_point(size=2, shape=23) +
+    theme_bw()
+```
+
+# Conclusion
+We could add many different models and create an ensembles model, or even use
+more folds for the cross validation to improve our predictions, but that would
+require a lot of time for training. We decided to keep it simple so that it is 
+easier to understand and faster to execute. We got an amazing 100% accuracy on 
+the test data, so there is no point to attempt more advanced techniques.
+
+
